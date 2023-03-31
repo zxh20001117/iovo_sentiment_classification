@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from transformers import BertModel
@@ -40,6 +41,8 @@ class bert_lstm(nn.Module):
 
         # dropout layer
         self.dropout = nn.Dropout(drop_prob)
+        self.dropout2 = nn.Dropout(drop_prob)
+
 
 
         # linear and sigmoid layers
@@ -47,10 +50,16 @@ class bert_lstm(nn.Module):
             self.fc1 = nn.Linear(hidden_dim * 2, conf.getint("train", "full_con1_out"))
         else:
             self.fc1 = nn.Linear(hidden_dim, conf.getint("train", "full_con1_out"))
+        # if bidirectional:
+        #     self.fc1 = nn.Linear(hidden_dim * 2, 2)
+        # else:
+        #     self.fc1 = nn.Linear(hidden_dim, 2)
 
         self.act = nn.ReLU()
 
-        self.fc2 = nn.Linear(conf.getint("train", "full_con1_out"), 2)
+        self.fc2 = nn.Linear(conf.getint("train", "full_con1_out"), conf.getint("train", "full_con2_out"))
+        # self.fc2 = nn.Linear(conf.getint("train", "full_con1_out"), 2)
+        self.fc3 = nn.Linear(conf.getint("train", "full_con2_out"), 2) 
 
         # self.sig = nn.Sigmoid()
         self.softmax = nn.Softmax()
@@ -84,13 +93,14 @@ class bert_lstm(nn.Module):
         out = self.dropout(hidden_last_out)
         # print(out.shape)    #[32,768]
         out = self.fc1(out)
+
+        out = self.dropout2(out)
         out = self.act(out)
-
         out = self.fc2(out)
-        return out
-
-        # out = F.softmax(out, dim=-1)
         # return out
+        out = self.fc3(out)
+
+        return out
 
 
     def init_hidden(self, batch_size):
@@ -112,7 +122,7 @@ class bert_lstm(nn.Module):
         return hidden
 
 
-if __name__ == "__main__":
+def train_iovo_with_log(level_one, level_two):
     model = bert_lstm()
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=conf.getfloat("train", "lr"))
@@ -123,9 +133,11 @@ if __name__ == "__main__":
 
     # train for some number of epochs
     epochs = conf.getint("train", "epochs")
-    data = get_data("sentimentData/marked sentences sentiment 2.xlsx")
-    data = get_iovo_data(data, 1, 2)
+    data = get_data(conf.get("data", "train_path"))
+    data = get_iovo_data(data, level_one, level_two)
     train_loader, valid_loader, test_loader = data_split(data)
+    loss_log = []
+    test_acc_log = []
 
     for e in range(epochs):
         # initialize hidden state
@@ -137,7 +149,6 @@ if __name__ == "__main__":
         # batch loop
         for inputs, labels in train_loader:
             counter += 1
-
             if USE_CUDA:
                 inputs, labels = inputs.cuda(), labels.cuda()
             h = tuple([each.data for each in h])
@@ -165,7 +176,43 @@ if __name__ == "__main__":
                         val_losses.append(val_loss.item())
 
                 model.train()
-                print("Epoch: {}/{}...".format(e + 1, epochs),
+                print("IOVO basic level-{} to level-{}   ".format(level_one, level_two),
+                      "Epoch: {}/{}...".format(e + 1, epochs),
                       "Step: {}...".format(counter),
                       "Loss: {:.6f}...".format(loss.item()),
                       "Val Loss: {:.6f}".format(np.mean(val_losses)))
+                loss_log.append([e+1, counter, loss.item(), np.mean(val_losses)])
+
+                correct = 0
+                test_h = model.init_hidden(conf.getint("train", "batch_size"))
+                with torch.no_grad():
+                    for inputs, labels in test_loader:
+                        if USE_CUDA:
+                            inputs, labels = inputs.cuda(), labels.cuda()
+                        test_h = tuple([each.data for each in test_h])
+                        output = model(inputs, h)
+                        output = torch.nn.Softmax(dim=1)(output)
+                        pred=torch.max(output, 1)[1]  # 找到概率最大的下标
+                        correct += pred.eq(labels.view_as(pred)).sum().item()
+                print("IOVO basic level-{} to level-{}   ".format(level_one, level_two),
+                      "Epoch: {}/{}...".format(e + 1, epochs),
+                      "Step: {}...".format(counter),
+                      'Test_Accuracy: {}/{} ({:.2f}%)'.format(correct, len(test_loader.dataset),
+                                                               100. * correct / len(test_loader.dataset)))
+                test_acc_log.append([e+1, counter, 100. * correct / len(test_loader.dataset)])
+
+    loss_log = pd.DataFrame(loss_log,
+                 columns=['epoch', 'counter', 'train_loss', 'valid_loss']
+                 )
+    loss_log.to_excel(f"{conf.get('train','loss_log')}/mark {level_one} vs mark {level_two} loss log.xlsx")
+
+    test_acc_log = pd.DataFrame(test_acc_log,
+                 columns=['epoch', 'counter', 'test_accuracy']
+                 )
+    test_acc_log.to_excel(f"{conf.get('train', 'test_acc_log')}/mark {level_one} vs mark {level_two} test acc log.xlsx")
+
+if __name__ == "__main__":
+    for i in range(1, 6):
+        for j in range(1, 6):
+            if i != j and i < j:
+                train_iovo_with_log(i, j)

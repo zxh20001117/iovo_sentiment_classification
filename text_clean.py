@@ -1,5 +1,6 @@
 import re
 
+
 def tokenize(text):
     """ basic tokenize method with word character, non word character and digits """
     text = re.sub(r" +", " ", str(text))
