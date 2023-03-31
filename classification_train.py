@@ -59,7 +59,7 @@ class bert_lstm(nn.Module):
 
         self.fc2 = nn.Linear(conf.getint("train", "full_con1_out"), conf.getint("train", "full_con2_out"))
         # self.fc2 = nn.Linear(conf.getint("train", "full_con1_out"), 2)
-        self.fc3 = nn.Linear(conf.getint("train", "full_con2_out"), 2) 
+        self.fc3 = nn.Linear(conf.getint("train", "full_con2_out"), 2)
 
         # self.sig = nn.Sigmoid()
         self.softmax = nn.Softmax()
@@ -210,6 +210,7 @@ def train_iovo_with_log(level_one, level_two):
                  columns=['epoch', 'counter', 'test_accuracy']
                  )
     test_acc_log.to_excel(f"{conf.get('train', 'test_acc_log')}/mark {level_one} vs mark {level_two} test acc log.xlsx")
+
 
 if __name__ == "__main__":
     for i in range(1, 6):
