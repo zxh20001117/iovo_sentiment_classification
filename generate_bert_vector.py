@@ -13,7 +13,6 @@ from sklearn.model_selection import train_test_split
 conf = ConfigParser()
 conf.read("config.ini", encoding='UTF-8')
 
-
 params = {
     "seed_val": conf.getint("train", "seed_val"),
     "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
@@ -40,15 +39,15 @@ torch.manual_seed(conf.getint("train", "seed_val"))
 torch.cuda.manual_seed_all(conf.getint("train", "seed_val"))
 
 
-def get_data(path):
+def get_data(path, return_attention_mask=False):
     startTime = time.time()
     df = pd.read_excel(path).reset_index()
     loadTime = time.time()
     print(f'it takes {int(loadTime - startTime)} s for loading data\n')
 
     df["sent_token_length"] = df["sentence"].apply(lambda x: len(x.split()))
-    tokenizer = BertTokenizer.from_pretrained(conf.get("train", "pretrained_model"),
-                                          do_lower_case=conf.getboolean("train", "do_lower_case"))
+    tokenizer = BertTokenizer.from_pretrained(conf.get("train", "pretrained_model") ,
+                                              do_lower_case=conf.getboolean("train", "do_lower_case"))
     df["sent_bert_token_length"] = df["sentence"].apply(
         lambda x: len(tokenizer(x, add_special_tokens=conf.getboolean("train", "add_special_tokens"))["input_ids"]))
     token_data = tokenizer.batch_encode_plus(
@@ -60,7 +59,14 @@ def get_data(path):
         return_tensors=conf.get("train", "return_tensors")
     )
     tokens = pd.DataFrame({'token': list(token_data['input_ids'].numpy())})
-    df = pd.concat([df, tokens], axis=1)
+
+    if return_attention_mask:
+        attention_mask = pd.DataFrame({'attention_mask': list(token_data['attention_mask'].numpy())})
+        df = pd.concat([df, tokens, attention_mask], axis=1)
+
+    else:
+        df = pd.concat([df, tokens], axis=1)
+
     encodingTime = time.time()
     print(f'it takes {int(encodingTime - loadTime)} s for BertTokenizer and Encoding\n')
 
@@ -69,7 +75,7 @@ def get_data(path):
 
 def get_iovo_data(data, level_one, level_two):
     iovo_data = data[(data["sentiment"] == level_one) | (data["sentiment"] == level_two)].copy()
-    iovo_data['label'] = iovo_data.apply(lambda x: 1 if x['sentiment'] == level_one else 0, axis = 1)
+    iovo_data['label'] = iovo_data.apply(lambda x: 1 if x['sentiment'] == level_one else 0, axis=1)
     return iovo_data
 
 
