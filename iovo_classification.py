@@ -3,15 +3,21 @@ from configparser import ConfigParser
 
 import pandas as pd
 import torch
+from gensim.models import Doc2Vec
 from torch.utils.data import TensorDataset, DataLoader
-from transformers import BertModel
+from transformers import BertModel, BertTokenizer
+from nltk.tokenize import word_tokenize
 
+from classification_train import bert_lstm
 from generate_bert_vector import get_data
 
 conf = ConfigParser()
 conf.read("config.ini", encoding='UTF-8')
 
 bert = BertModel.from_pretrained(conf.get("train", "pretrained_model"))
+tokenizer = BertTokenizer.from_pretrained(conf.get("train", "pretrained_model"))
+modelDict = {}
+doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+"/d2v.model")
 
 try:
     train_data = pd.read_json("data/train_sentence_vector_bert-last-hidden-state.json").drop(
@@ -32,6 +38,15 @@ except FileNotFoundError:
     exit(0)
 
 
+def load_basic_models(modelDict):
+    for i in range(1, 6):
+        for j in range(i+1, 6):
+            model = bert_lstm()
+            model.load_state_dict(torch.load(f"{conf.get('train', 'modelPath')}/{i} vs {j} bert-lstm.pth"))
+            model.eval()
+            modelDict[f"{i} vs {j}"] = model
+
+
 def get_cos_similar_multi(v1: list, v2: list):
     num = np.dot([v1], np.array(v2).T)  # 向量点乘
     denom = np.linalg.norm(v1) * np.linalg.norm(v2, axis=1)  # 求模长的乘积
@@ -45,7 +60,7 @@ def cal_center_distance(vector_in):
     return distance
 
 
-def cal_k_nearest_avg_distance(vector_in, K=5):
+def cal_k_nearest_avg_distance(vector_in, K = 5):
     distance = np.zeros(5)
     for i in group_data.groups.keys():
         temp_data = group_data.get_group(i)
@@ -64,6 +79,7 @@ def cal_relative_competence_weight(dC, dK):
     for i in range(5):
         weight_matrix[i][i] = 0
     return weight_matrix
+
 
 def get_bert_seq_vector(tokens, attention_mask, mean_pooled=True):
     if mean_pooled:
@@ -109,19 +125,43 @@ def get_bert_seq_vector(tokens, attention_mask, mean_pooled=True):
         return pooler_output
 
 
-def get_single_ovo_score(sentence, level_one, level_two):
-    return 1
+def get_single_ovo_score(token, level_one, level_two):
+    h = modelDict[f"{level_one} vs {level_two}"].init_hidden(conf.getint("train", "batch_size"))
+    output = modelDict[f"{level_one} vs {level_two}"](token, h)
+    probs = torch.softmax(output, dim=1)
+    true_probs = probs[:, 1].tolist()
+    return true_probs[0]
 
 
-# def get_(input_vector, class_label):
 
-def get_iovo_score(sentence):
+def get_iovo_R_matrix(sentence):
     R = np.zeros((5, 5))
+    token = tokenizer.batch_encode_plus(
+        sentence,
+        add_special_tokens=conf.getboolean("train", "add_special_tokens"),
+        return_attention_mask=conf.getboolean("train", "return_attention_mask"),
+        padding='max_length',
+        max_length=conf.getint("train", "seq_length"),
+        return_tensors=conf.get("train", "return_tensors")
+    )
+
     for level_one in range(1, 6):
         for level_two in range(1, 6):
             if level_one < level_two:
-                R[level_one - 1, level_two - 1] = get_single_ovo_score(sentence, level_one, level_two)
+                R[level_one - 1, level_two - 1] = get_single_ovo_score(token, level_one, level_two)
                 R[level_two - 1, level_one - 1] = 1.0 - R[level_one - 1, level_two - 1]
+    return R
+
+def get_iovo_class_result(sentence):
+    R = get_iovo_R_matrix(sentence)
+    d2v_vector = doc2vec_model.infer_vector(word_tokenize(sentence))
+    dC = cal_center_distance(d2v_vector)
+    dK = cal_k_nearest_avg_distance(d2v_vector)
+    weighted_marix = cal_relative_competence_weight(dC, dK)
+    weighted_R = R * weighted_marix
+    row_sums = weighted_R.sum(axis=1)
+    most_likely_class = row_sums.argmax() + 1
+    return most_likely_class
 
 
 T = np.zeros((5, conf.getint("classification", "sentence_vector_length")))
@@ -158,7 +198,3 @@ dK = cal_k_nearest_avg_distance(train_data['vector'][0])
 dC = cal_center_distance(train_data['vector'][0])
 
 matrix = cal_relative_competence_weight(dC, dK)
-
-print("dC: ", dC)
-print("dK: ", dK)
-print("weighted matrix:\n", matrix)
