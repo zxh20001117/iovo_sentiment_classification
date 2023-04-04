@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 from configparser import ConfigParser
 
@@ -17,11 +19,17 @@ conf.read("config.ini", encoding='UTF-8')
 bert = BertModel.from_pretrained(conf.get("train", "pretrained_model"))
 tokenizer = BertTokenizer.from_pretrained(conf.get("train", "pretrained_model"))
 modelDict = {}
-doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+"/d2v.model")
+d2v_model = None
+
+# 需要加载doc2vecmodel 则改为True
+if True:
+    doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+"/d2v.model")
+
+
 
 try:
-    train_data = pd.read_json("data/train_sentence_vector_bert-last-hidden-state.json").drop(
-        ['level_0', 'index', 'Unnamed: 0', 'sent_token_length', 'sent_bert_token_length', 'token', 'attention_mask'],
+    train_data = pd.read_json("data/train_sentence_vector_doc2vec.json").drop(
+        ['index', 'Unnamed: 0'],
         axis=1)
     group_data = train_data.groupby('sentiment')
     avg_vectors = {"label": [], "avg_vector": []}
@@ -81,8 +89,8 @@ def cal_relative_competence_weight(dC, dK):
     return weight_matrix
 
 
-def get_bert_seq_vector(tokens, attention_mask, mean_pooled=True):
-    if mean_pooled:
+def get_bert_seq_vector(tokens, attention_mask, vector_model= 'mean_pooled'):
+    if vector_model == 'mean_pooled':
         embeddings = bert(tokens).last_hidden_state  # shape [batch, seq_length, 768]
 
         # attention mask shape [batch, seq_length] ---→ mask shape [batch, seq_length, 768]
@@ -120,7 +128,8 @@ def get_bert_seq_vector(tokens, attention_mask, mean_pooled=True):
         # 计算平均值 作为句向量
         mean_pooled = summed / summed_mask
         return mean_pooled
-    else:
+
+    elif vector_model == 'pooler_output':
         pooler_output = bert(tokens)[-1]
         return pooler_output
 
@@ -167,7 +176,7 @@ def get_iovo_class_result(sentence):
 T = np.zeros((5, conf.getint("classification", "sentence_vector_length")))
 
 
-def generate_train_vector(mean_pooled=True):
+def generate_train_vector(vector_model = 'mean_pooled'):
     train_data = get_data(conf.get("data", "train_path"), return_attention_mask=True).drop(["sentence"], axis=1)
     train_data = train_data.reset_index()
 
@@ -182,19 +191,44 @@ def generate_train_vector(mean_pooled=True):
 
     train_vector = []
     for token, attention_mask, label in train_loader:
-        vectors = get_bert_seq_vector(token, attention_mask, mean_pooled)
+        vectors = get_bert_seq_vector(token, attention_mask, vector_model)
         for i in list(vectors.detach().numpy()):
             train_vector.append(i)
 
     train_data_vector = pd.DataFrame({'vector': train_vector})
     train_data = pd.concat([train_data, train_data_vector], axis=1)
-    if mean_pooled:
+    if vector_model == 'mean_pooled':
         train_data.to_json("data/train_sentence_vector_bert-last-hidden-state.json")
-    else:
+    elif vector_model == 'pooler_output':
         train_data.to_json("data/train_sentence_vector_bert-pooler-output.json")
 
 
-dK = cal_k_nearest_avg_distance(train_data['vector'][0])
-dC = cal_center_distance(train_data['vector'][0])
+def generate_train_doc2vec_vector():
+    startTime = time.time()
+    df = pd.read_excel(conf.get("data", "train_path")).reset_index()
+    loadTime = time.time()
+    print(f'it takes {loadTime - startTime:.1f} s for loading data\n')
+    doc2vec_vectors = [doc2vec_model.infer_vector(doc.split()) for doc in df['sentence']]
+    df['vector'] = doc2vec_vectors
+    generateTime = time.time()
+    print(f'it takes {generateTime - loadTime:.1f} s for generating vectors\n')
+    print(df['vector'].head())
+    df.to_json('data/train_sentence_vector_doc2vec.json')
 
-matrix = cal_relative_competence_weight(dC, dK)
+
+
+
+if __name__ == '__main__':
+    test_sentence = "i had a very uncomfortable night in that room and therefore i went to the front desk the next day to request a serious change of room"
+    test_vector = doc2vec_model.infer_vector(test_sentence.split())
+    print(test_sentence)
+    dC = cal_center_distance(test_vector)
+    print(dC)
+    dK = cal_k_nearest_avg_distance(test_vector, K=5)
+    print(dK)
+    w = cal_relative_competence_weight(dC, dK)
+    print(w)
+    row_sums = w.sum(axis=1)
+    most_likely_class = row_sums.argmax() + 1
+    print("most likely class: ", most_likely_class)
+

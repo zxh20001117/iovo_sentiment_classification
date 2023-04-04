@@ -3,7 +3,6 @@ from configparser import ConfigParser
 import pandas as pd
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from nltk.tokenize import word_tokenize
-import nltk
 import time
 
 conf = ConfigParser()
