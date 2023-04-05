@@ -15,6 +15,7 @@ from generate_bert_vector import get_data
 
 conf = ConfigParser()
 conf.read("config.ini", encoding='UTF-8')
+USE_CUDA = torch.cuda.is_available()
 
 bert = BertModel.from_pretrained(conf.get("train", "pretrained_model"))
 tokenizer = BertTokenizer.from_pretrained(conf.get("train", "pretrained_model"))
@@ -23,12 +24,12 @@ d2v_model = None
 
 # 需要加载doc2vecmodel 则改为True
 if True:
-    doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+"/d2v.model")
+    doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+"/d2v 128.model")
 
 
 
 try:
-    train_data = pd.read_json("data/train_sentence_vector_doc2vec.json").drop(
+    train_data = pd.read_json("data/train_sentence_vector_doc2vec 128.json").drop(
         ['index', 'Unnamed: 0'],
         axis=1)
     group_data = train_data.groupby('sentiment')
@@ -47,12 +48,15 @@ except FileNotFoundError:
 
 
 def load_basic_models(modelDict):
+    startTime = time.time()
     for i in range(1, 6):
         for j in range(i+1, 6):
-            model = bert_lstm()
-            model.load_state_dict(torch.load(f"{conf.get('train', 'modelPath')}/{i} vs {j} bert-lstm.pth"))
+            model = bert_lstm().cuda()
+            model.load_state_dict(torch.load(f"{conf.get('train', 'modelPath')}/{i} vs {j} bert-lstm.pth")['model'])
             model.eval()
             modelDict[f"{i} vs {j}"] = model
+    endTime = time.time()
+    print(f'it takes {endTime - startTime:.1f} s for loading basic model\n')
 
 
 def get_cos_similar_multi(v1: list, v2: list):
@@ -135,7 +139,8 @@ def get_bert_seq_vector(tokens, attention_mask, vector_model= 'mean_pooled'):
 
 
 def get_single_ovo_score(token, level_one, level_two):
-    h = modelDict[f"{level_one} vs {level_two}"].init_hidden(conf.getint("train", "batch_size"))
+    h = modelDict[f"{level_one} vs {level_two}"].init_hidden(token.size(0), cuda= True)
+    token = token.cuda()
     output = modelDict[f"{level_one} vs {level_two}"](token, h)
     probs = torch.softmax(output, dim=1)
     true_probs = probs[:, 1].tolist()
@@ -146,13 +151,14 @@ def get_single_ovo_score(token, level_one, level_two):
 def get_iovo_R_matrix(sentence):
     R = np.zeros((5, 5))
     token = tokenizer.batch_encode_plus(
-        sentence,
+        [sentence],
         add_special_tokens=conf.getboolean("train", "add_special_tokens"),
         return_attention_mask=conf.getboolean("train", "return_attention_mask"),
         padding='max_length',
         max_length=conf.getint("train", "seq_length"),
         return_tensors=conf.get("train", "return_tensors")
     )
+    token = token['input_ids']
 
     for level_one in range(1, 6):
         for level_two in range(1, 6):
@@ -161,13 +167,27 @@ def get_iovo_R_matrix(sentence):
                 R[level_two - 1, level_one - 1] = 1.0 - R[level_one - 1, level_two - 1]
     return R
 
+
 def get_iovo_class_result(sentence):
+    # startTime = time.time()
     R = get_iovo_R_matrix(sentence)
+    # RTime = time.time()
+    # print(f'it takes {RTime - startTime:.1f} s for R\n')
+    # print(R)
+
     d2v_vector = doc2vec_model.infer_vector(word_tokenize(sentence))
     dC = cal_center_distance(d2v_vector)
+    # dCTime = time.time()
+    # print(f'it takes {dCTime - RTime:.1f} s for dC\n')
+    # print(dC)
     dK = cal_k_nearest_avg_distance(d2v_vector)
+    # dKTime = time.time()
+    # print(f'it takes {dKTime - dCTime:.1f} s for dK\n')
+    # print(dK)
     weighted_marix = cal_relative_competence_weight(dC, dK)
+    # print(weighted_marix)
     weighted_R = R * weighted_marix
+    # print(weighted_R)
     row_sums = weighted_R.sum(axis=1)
     most_likely_class = row_sums.argmax() + 1
     return most_likely_class
@@ -213,22 +233,15 @@ def generate_train_doc2vec_vector():
     generateTime = time.time()
     print(f'it takes {generateTime - loadTime:.1f} s for generating vectors\n')
     print(df['vector'].head())
-    df.to_json('data/train_sentence_vector_doc2vec.json')
+    df.to_json('data/train_sentence_vector_doc2vec 128.json')
 
+# 需要加载 分类器基础模型 则改为True
+if True:
+    load_basic_models(modelDict)
 
 
 
 if __name__ == '__main__':
-    test_sentence = "i had a very uncomfortable night in that room and therefore i went to the front desk the next day to request a serious change of room"
-    test_vector = doc2vec_model.infer_vector(test_sentence.split())
-    print(test_sentence)
-    dC = cal_center_distance(test_vector)
-    print(dC)
-    dK = cal_k_nearest_avg_distance(test_vector, K=5)
-    print(dK)
-    w = cal_relative_competence_weight(dC, dK)
-    print(w)
-    row_sums = w.sum(axis=1)
-    most_likely_class = row_sums.argmax() + 1
-    print("most likely class: ", most_likely_class)
+    test_sentence = "polite and helpful staff and a lovely breakfast buffet then this is perfect"
 
+    print(get_iovo_class_result(test_sentence))
