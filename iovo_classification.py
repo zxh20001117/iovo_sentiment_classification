@@ -24,12 +24,12 @@ d2v_model = None
 
 # 需要加载doc2vecmodel 则改为True
 if True:
-    doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+"/d2v 128.model")
+    doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+f"/{conf.get('iovo', 'doc2vec_model')}")
 
 
 
 try:
-    train_data = pd.read_json("data/train_sentence_vector_doc2vec 128.json").drop(
+    train_data = pd.read_json(conf.get("iovo", "train_data_vector")).drop(
         ['index', 'Unnamed: 0'],
         axis=1)
     group_data = train_data.groupby('sentiment')
