@@ -1,3 +1,4 @@
+import pickle
 import time
 
 import numpy as np
@@ -17,13 +18,13 @@ conf = ConfigParser()
 conf.read("config.ini", encoding='UTF-8')
 USE_CUDA = torch.cuda.is_available()
 
-bert = BertModel.from_pretrained(conf.get("train", "pretrained_model"))
+# bert = BertModel.from_pretrained(conf.get("train", "pretrained_model"))
 tokenizer = BertTokenizer.from_pretrained(conf.get("train", "pretrained_model"))
 modelDict = {}
 d2v_model = None
 
 # 需要加载doc2vecmodel 则改为True
-if True:
+if False:
     doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+f"/{conf.get('iovo', 'doc2vec_model')}")
 
 
@@ -93,49 +94,49 @@ def cal_relative_competence_weight(dC, dK):
     return weight_matrix
 
 
-def get_bert_seq_vector(tokens, attention_mask, vector_model= 'mean_pooled'):
-    if vector_model == 'mean_pooled':
-        embeddings = bert(tokens).last_hidden_state  # shape [batch, seq_length, 768]
-
-        # attention mask shape [batch, seq_length] ---→ mask shape [batch, seq_length, 768]
-        # attention_mask :
-        # tensor([
-        #     [1, 1, 1, ..., 0, 0, 0],
-        #     ...
-        #     ...
-        #     ...
-        # ])
-        #
-        # mask:
-        # tensor([[[1., 1., 1., ..., 1., 1., 1.],
-        #          [1., 1., 1., ..., 1., 1., 1.],
-        #          [1., 1., 1., ..., 1., 1., 1.],
-        #          ...,
-        #          [0., 0., 0., ..., 0., 0., 0.],
-        #          [0., 0., 0., ..., 0., 0., 0.],
-        #          [0., 0., 0., ..., 0., 0., 0.]],
-        #         ...
-        #         ...
-        #         ...
-        # ])
-        mask = attention_mask.unsqueeze(-1).expand(embeddings.size()).float()
-
-        # 每个向量表示一个单独token的掩码——现在每个token都有一个大小为768的向量，表示它的attention_mask状态。然后将两个张量相乘
-        masked_embeddings = embeddings * mask
-
-        # 沿着轴1将剩余的嵌入项求和:
-        summed = torch.sum(masked_embeddings, 1)
-
-        # 将张量的每个位置上的值相加
-        summed_mask = torch.clamp(mask.sum(1), min=1e-9)
-
-        # 计算平均值 作为句向量
-        mean_pooled = summed / summed_mask
-        return mean_pooled
-
-    elif vector_model == 'pooler_output':
-        pooler_output = bert(tokens)[-1]
-        return pooler_output
+# def get_bert_seq_vector(tokens, attention_mask, vector_model= 'mean_pooled'):
+#     if vector_model == 'mean_pooled':
+#         embeddings = bert(tokens).last_hidden_state  # shape [batch, seq_length, 768]
+#
+#         # attention mask shape [batch, seq_length] ---→ mask shape [batch, seq_length, 768]
+#         # attention_mask :
+#         # tensor([
+#         #     [1, 1, 1, ..., 0, 0, 0],
+#         #     ...
+#         #     ...
+#         #     ...
+#         # ])
+#         #
+#         # mask:
+#         # tensor([[[1., 1., 1., ..., 1., 1., 1.],
+#         #          [1., 1., 1., ..., 1., 1., 1.],
+#         #          [1., 1., 1., ..., 1., 1., 1.],
+#         #          ...,
+#         #          [0., 0., 0., ..., 0., 0., 0.],
+#         #          [0., 0., 0., ..., 0., 0., 0.],
+#         #          [0., 0., 0., ..., 0., 0., 0.]],
+#         #         ...
+#         #         ...
+#         #         ...
+#         # ])
+#         mask = attention_mask.unsqueeze(-1).expand(embeddings.size()).float()
+#
+#         # 每个向量表示一个单独token的掩码——现在每个token都有一个大小为768的向量，表示它的attention_mask状态。然后将两个张量相乘
+#         masked_embeddings = embeddings * mask
+#
+#         # 沿着轴1将剩余的嵌入项求和:
+#         summed = torch.sum(masked_embeddings, 1)
+#
+#         # 将张量的每个位置上的值相加
+#         summed_mask = torch.clamp(mask.sum(1), min=1e-9)
+#
+#         # 计算平均值 作为句向量
+#         mean_pooled = summed / summed_mask
+#         return mean_pooled
+#
+#     elif vector_model == 'pooler_output':
+#         pooler_output = bert(tokens)[-1]
+#         return pooler_output
 
 
 def get_single_ovo_score(token, level_one, level_two):
@@ -196,31 +197,31 @@ def get_iovo_class_result(sentence):
 T = np.zeros((5, conf.getint("classification", "sentence_vector_length")))
 
 
-def generate_train_vector(vector_model = 'mean_pooled'):
-    train_data = get_data(conf.get("data", "train_path"), return_attention_mask=True).drop(["sentence"], axis=1)
-    train_data = train_data.reset_index()
-
-    train_token = torch.tensor(np.array([i for i in train_data['token']]))
-    train_attention_mask = torch.tensor(np.array([i for i in train_data['attention_mask']]))
-    train_label = torch.tensor(np.array([i for i in train_data['sentiment']]))
-
-    train_dataset = TensorDataset(train_token, train_attention_mask, train_label)
-    get_vector_batch_size = conf.getint("classification", "batch_size")
-
-    train_loader = DataLoader(train_dataset, shuffle=True, batch_size=get_vector_batch_size)
-
-    train_vector = []
-    for token, attention_mask, label in train_loader:
-        vectors = get_bert_seq_vector(token, attention_mask, vector_model)
-        for i in list(vectors.detach().numpy()):
-            train_vector.append(i)
-
-    train_data_vector = pd.DataFrame({'vector': train_vector})
-    train_data = pd.concat([train_data, train_data_vector], axis=1)
-    if vector_model == 'mean_pooled':
-        train_data.to_json("data/train_sentence_vector_bert-last-hidden-state.json")
-    elif vector_model == 'pooler_output':
-        train_data.to_json("data/train_sentence_vector_bert-pooler-output.json")
+# def generate_train_vector(vector_model = 'mean_pooled'):
+#     train_data = get_data(conf.get("data", "train_path"), return_attention_mask=True).drop(["sentence"], axis=1)
+#     train_data = train_data.reset_index()
+#
+#     train_token = torch.tensor(np.array([i for i in train_data['token']]))
+#     train_attention_mask = torch.tensor(np.array([i for i in train_data['attention_mask']]))
+#     train_label = torch.tensor(np.array([i for i in train_data['sentiment']]))
+#
+#     train_dataset = TensorDataset(train_token, train_attention_mask, train_label)
+#     get_vector_batch_size = conf.getint("classification", "batch_size")
+#
+#     train_loader = DataLoader(train_dataset, shuffle=True, batch_size=get_vector_batch_size)
+#
+#     train_vector = []
+#     for token, attention_mask, label in train_loader:
+#         vectors = get_bert_seq_vector(token, attention_mask, vector_model)
+#         for i in list(vectors.detach().numpy()):
+#             train_vector.append(i)
+#
+#     train_data_vector = pd.DataFrame({'vector': train_vector})
+#     train_data = pd.concat([train_data, train_data_vector], axis=1)
+#     if vector_model == 'mean_pooled':
+#         train_data.to_json("data/train_sentence_vector_bert-last-hidden-state.json")
+#     elif vector_model == 'pooler_output':
+#         train_data.to_json("data/train_sentence_vector_bert-pooler-output.json")
 
 
 def generate_train_doc2vec_vector():
@@ -236,12 +237,21 @@ def generate_train_doc2vec_vector():
     df.to_json('data/train_sentence_vector_doc2vec 128.json')
 
 # 需要加载 分类器基础模型 则改为True
-if True:
+if False:
     load_basic_models(modelDict)
 
 
+def get_sentences_list(df):
+    sentences = []
+    with open("data/value_attributes.pickle", "rb") as f:
+        attribute_group = pickle.load(f)
+    for values in attribute_group.keys():
+        for line in df['values']:
+            for s in line:
+                sentences.append(s)
+    return sentences
+
 
 if __name__ == '__main__':
-    test_sentence = "polite and helpful staff and a lovely breakfast buffet then this is perfect"
-
-    print(get_iovo_class_result(test_sentence))
+    sentence = "stayed right after the big china import fair best part of this hotel was jessica wang the front office manager she was outstanding went out of her way to make sure i was happyconcierge team was so so not up to waldorf standards hotel grounds and rooms were nothing special and not what you d expect for waldorf the old part of the hotel has a lot of character but new part is devoid of character or atmosphere restaurant for breakfast had top notch service and decent food nothing incredible a but service and staff were on it spa was sub par reviews her raves about it ridiculous for the price go outside the hotel there s far better poorly trained on massage and customer service bellmen and doormen on way in were terrible but better on the way out but that s because jessica wang the front desk manager followed me out like i was head of state katrina shi in business center was also excellent location is good but for price i wouldn t stay here again better options on the bund"
+    print(get_iovo_class_result(sentence))
