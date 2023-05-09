@@ -66,6 +66,7 @@ class bert_lstm(nn.Module):
         batch_size = x.size(0)
         # 生成bert字向量
         x = self.bert(x)[0]  # bert 字向量
+        # print(x.shape) #[8, 128, 768]
 
         # lstm_out
         # x = x.float()

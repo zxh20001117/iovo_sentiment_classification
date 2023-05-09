@@ -25,6 +25,7 @@ d2v_model = None
 if True:
     doc2vec_model = Doc2Vec.load(conf.get("doc2vec", "modelPath")+f"/{conf.get('iovo', 'doc2vec_model')}")
 
+
 def get_sentences_list(df):
     sentences = []
     with open("data/value_attributes.pickle", "rb") as f:
@@ -75,7 +76,7 @@ def predict_all_ovo(sentences):
             temp_sentences[f"{level_one}-{level_two}"] = predict
 
 
-def get_iovo_class(sentences):
+def get_iovo_class(sentences, K=5):
     predicts = []
     count = 0
     for i in range(len(sentences)):
@@ -87,7 +88,7 @@ def get_iovo_class(sentences):
                     R[level_two - 1, level_one - 1] = 1.0 - R[level_one - 1, level_two - 1]
         d2v_vector = doc2vec_model.infer_vector(word_tokenize(sentences.iloc[i]['sentence']))
         dC = cal_center_distance(d2v_vector)
-        dK = cal_k_nearest_avg_distance(d2v_vector)
+        dK = cal_k_nearest_avg_distance(d2v_vector, K)
         weighted_marix = cal_relative_competence_weight(dC, dK)
 
         weighted_R = R * weighted_marix
@@ -99,6 +100,21 @@ def get_iovo_class(sentences):
     sentences['IOVO predict'] = predicts
 
 
+def get_dC(data):
+    dC = []
+    for i in range(len(data)):
+        d2v_vector = doc2vec_model.infer_vector(word_tokenize(data.iloc[i]['sentence']))
+        dC.append(cal_center_distance(d2v_vector))
+    return dC
+
+
+def get_dK(data, K=5):
+    dK = []
+    for i in range(len(data)):
+        d2v_vector = doc2vec_model.infer_vector(word_tokenize(data.iloc[i]['sentence']))
+        dK.append(cal_k_nearest_avg_distance(d2v_vector, K))
+    return dK
+
 class IOVOThread(threading.Thread):
     def __init__(self, func, args):
         threading.Thread.__init__(self)
@@ -107,7 +123,7 @@ class IOVOThread(threading.Thread):
 
     def run(self):
         print(f'当前子进程：{threading.currentThread().name}')
-        self.func(self.args[0])
+        self.func(self.args[0], self.args[1])
         print(f'子进程：{threading.currentThread().name} 执行完成')
 
 
@@ -134,7 +150,7 @@ if __name__ == "__main__":
     # del sentences
     # threadList = []
     # for index, t in enumerate(sentences_groups):
-    #     iT = IOVOThread(get_iovo_class, (sentences_groups[index], ))
+    #     iT = IOVOThread(get_iovo_class, (sentences_groups[index], 5))
     #     threadList.append(iT)
     # for m in threadList:
     #     m.start()
@@ -146,9 +162,5 @@ if __name__ == "__main__":
     # result = pd.concat(sentences_groups)
     # result.to_json(f"result/{level} hotel iovo scores.json")
     # # get_iovo_class(sentences)
-
-
-
-
 
 
